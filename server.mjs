@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// codex-p-proxy — OpenAI API 호환 로컬 서버 (codex exec 백엔드)
-// 개인용 전용: ChatGPT 구독으로 로그인된 Codex CLI를 호출합니다.
-// 지원: 텍스트, 스트리밍(완성 후 한 번에), 이미지 입력, function calling(tool use). 의존성 없음 (Node 18+).
-// 실행: node server.mjs
+// codex-p-proxy — local OpenAI-compatible API server backed by `codex exec`
+// Personal use only: calls the Codex CLI logged in with your ChatGPT subscription.
+// Supports: text, streaming (sent once complete), image input, function calling (tool use). No dependencies (Node 18+).
+// Run: node server.mjs
 
 import http from "node:http";
 import { spawn, spawnSync } from "node:child_process";
@@ -12,7 +12,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 
-// codex CLI 찾기: CODEX_BIN → npm install로 함께 깔린 CLI → PATH의 codex
+// Find the codex CLI: CODEX_BIN → CLI installed by npm install → codex on PATH
 const HERE = dirname(fileURLToPath(import.meta.url));
 function findCodex() {
   if (process.env.CODEX_BIN) return process.env.CODEX_BIN;
@@ -20,15 +20,15 @@ function findCodex() {
   return existsSync(local) ? local : "codex";
 }
 
-// --port 9000 (또는 PORT=9000). 직접 지정하지 않았으면 8790이 사용 중일 때 다음 빈 포트로 넘어감
+// --port 9000 (or PORT=9000). If not set explicitly and 8790 is busy, move on to the next free port
 const argPort = process.argv.includes("--port") ? process.argv[process.argv.indexOf("--port") + 1] : undefined;
 const CFG = {
-  host: process.env.HOST || "127.0.0.1",           // 로컬에서만 접근 (외부 공개 금지)
+  host: process.env.HOST || "127.0.0.1",           // local access only (do not expose)
   port: Number(argPort || process.env.PORT || 8790),
   portExplicit: Boolean(argPort || process.env.PORT),
-  apiKey: process.env.LOCAL_API_KEY || "",          // 설정하면 Bearer 검사
+  apiKey: process.env.LOCAL_API_KEY || "",          // if set, check the Bearer token
   codexBin: findCodex(),
-  defaultModel: process.env.DEFAULT_MODEL || "",    // 비우면 Codex 기본 모델
+  defaultModel: process.env.DEFAULT_MODEL || "",    // empty → Codex default model
   defaultEffort: process.env.DEFAULT_EFFORT || "low",
   maxConcurrent: Number(process.env.MAX_CONCURRENT || 2),
   timeoutMs: Number(process.env.TIMEOUT_MS || 300_000),
@@ -40,17 +40,17 @@ const CFG = {
 const TAG_OPEN = "<tool_calls>", TAG_CLOSE = "</tool_calls>";
 const EFFORTS = ["low", "medium", "high", "xhigh", "max", "ultra"];
 
-// Codex는 코딩 에이전트라 기본으로 도구·스킬·플러그인 설명을 잔뜩 붙임 → 전부 끄고 순수 챗봇으로
+// Codex is a coding agent and adds lots of tool/skill/plugin instructions by default → turn them all off for a plain chatbot
 const DISABLED_FEATURES = ["apps", "browser_use", "browser_use_external", "code_mode_host", "computer_use", "goals",
   "hooks", "image_generation", "in_app_browser", "multi_agent", "plugins", "remote_plugin", "shell_tool", "skill_search",
   "sleep_tool", "tool_suggest", "unified_exec", "view_image"];
 const CODEX_OVERRIDES = ["skills.include_instructions=false", "skills.bundled.enabled=false",
   "include_permissions_instructions=false", "include_environment_context=false",
   "include_collaboration_mode_instructions=false", 'web_search="disabled"'];
-// 끄지 못하는 내장 도구(Code Mode 등)는 host가 꺼져 있어 실패하지만, 시도 자체로 왕복이 늘어나므로 막아 둠
+// Built-in tools that can't be turned off (Code Mode etc.) fail because their host is off, but each attempt adds a round trip, so forbid them
 const NO_BUILTIN_TOOLS = "\n\nYou cannot run code, read files, browse, or use any built-in tools. Never try to; answer directly from your own knowledge.";
 
-// ---------- 모델 목록 (codex debug models) ----------
+// ---------- Model list (codex debug models) ----------
 function loadModels() {
   const r = spawnSync(CFG.codexBin, ["debug", "models"], { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
   try {
@@ -59,14 +59,14 @@ function loadModels() {
   } catch { return []; }
 }
 
-// 목록에 있는 이름이면 그대로, gpt-4o 같은 나머지는 DEFAULT_MODEL(없으면 Codex 기본)
+// Names in the list are used as is; anything else (gpt-4o etc.) goes to DEFAULT_MODEL (or the Codex default)
 function mapModel(name) {
   if (name && MODELS.includes(name)) return name;
   return CFG.defaultModel || undefined;
 }
 
 // =====================================================================
-// 1. 입력 정규화: OpenAI 메시지 → 내부 형식
+// 1. Input normalization: OpenAI messages → internal format
 //    turn = { role: "user"|"assistant", parts: [...] }
 //    part = {kind:"text",text} | {kind:"image",url|media_type+data}
 //         | {kind:"tool_call",id,name,args} | {kind:"tool_result",id,name,parts}
@@ -109,14 +109,14 @@ function normalizeOpenAI(messages = []) {
   return { system: system.join("\n\n"), turns };
 }
 
-// 도구 정의 정규화 → [{name, description, schema}]
+// Tool definitions → [{name, description, schema}]
 function normalizeTools(body) {
   const list = body.tools || (body.functions || []).map((f) => ({ type: "function", function: f }));
   return list.filter((t) => t.type === "function" && t.function?.name)
     .map((t) => ({ name: t.function.name, description: t.function.description || "", schema: t.function.parameters || { type: "object", properties: {} } }));
 }
 
-// tool_choice 정규화 → {mode:"auto"|"none"|"required"|"specific", name?}
+// tool_choice → {mode:"auto"|"none"|"required"|"specific", name?}
 function normalizeChoice(tc) {
   if (!tc) return { mode: "auto" };
   if (typeof tc === "string") return { mode: tc === "required" ? "required" : tc === "none" ? "none" : "auto" };
@@ -126,14 +126,14 @@ function normalizeChoice(tc) {
 }
 
 // =====================================================================
-// 2. 내부 형식 → codex exec 입력 (프롬프트 텍스트 + 이미지 파일)
+// 2. Internal format → codex exec input (prompt text + image files)
 // =====================================================================
 async function resolveImage(p) {
   if (p.data) return p;
   const r = await fetch(p.url);
-  if (!r.ok) throw new Error(`이미지 다운로드 실패 (${r.status}): ${p.url}`);
+  if (!r.ok) throw new Error(`image download failed (${r.status}): ${p.url}`);
   const buf = Buffer.from(await r.arrayBuffer());
-  if (buf.length > CFG.maxImageBytes) throw new Error(`이미지가 너무 큼: ${p.url}`);
+  if (buf.length > CFG.maxImageBytes) throw new Error(`image too large: ${p.url}`);
   const media_type = (r.headers.get("content-type") || "image/png").split(";")[0];
   return { kind: "image", media_type, data: buf.toString("base64") };
 }
@@ -155,7 +155,7 @@ async function buildInput(turns) {
     return out.filter(Boolean).join("\n");
   };
 
-  // 같은 역할이 연속되면 합침 (예: tool 결과 여러 개)
+  // Merge consecutive turns with the same role (e.g. several tool results)
   const merged = [];
   for (const t of turns) {
     const prev = merged[merged.length - 1];
@@ -177,7 +177,7 @@ async function buildInput(turns) {
   return { text, images };
 }
 
-// 도구 사용 지시문 (시스템 프롬프트에 덧붙임)
+// Tool-use instructions (appended to the system prompt)
 function toolInstructions(tools, choice) {
   if (!tools.length || choice.mode === "none") return "";
   const defs = tools.map((t) => ({ name: t.name, description: t.description, parameters: t.schema }));
@@ -203,7 +203,7 @@ Rules:
 - ${rule}`;
 }
 
-// 모델 출력에서 도구 호출 블록 추출
+// Extract the tool-call block from model output
 function safeJson(s, fallback) {
   if (s && typeof s === "object") return s;
   try { return JSON.parse(s); } catch { return fallback; }
@@ -220,12 +220,12 @@ function parseToolCalls(text, tools) {
   const calls = (arr || [])
     .filter((c) => c && names.has(c.name))
     .map((c) => ({ name: c.name, args: safeJson(c.arguments ?? c.input ?? c.parameters, {}) ?? {} }));
-  if (!calls.length) return { text, calls: [] };           // 파싱 실패 → 일반 텍스트로 취급
+  if (!calls.length) return { text, calls: [] };           // parse failed → treat as plain text
   return { text: text.slice(0, i).trim(), calls };
 }
 
 // =====================================================================
-// 3. codex exec 실행
+// 3. Run codex exec
 // =====================================================================
 let running = 0;
 const queue = [];
@@ -236,19 +236,19 @@ function release() { const next = queue.shift(); if (next) next(); else running-
 
 const EXT = { "image/png": "png", "image/jpeg": "jpg", "image/gif": "gif", "image/webp": "webp" };
 
-// codex 에러 메시지는 JSON 문자열로 감싸져 올 때가 많음 → 안쪽 message만 꺼냄
+// Codex error messages often come wrapped in a JSON string → pull out the inner message
 function codexError(msg) {
   const j = safeJson(msg, null);
   return j?.error?.message || j?.message || msg || "codex error";
 }
 
-/** codex exec 실행. 반환 { text, usage, model } */
+/** Run codex exec. Returns { text, usage, model } */
 async function runCodex({ input, system, model, effort, signal }) {
   await acquire();
-  // 요청마다 빈 임시 폴더: 프로젝트 컨텍스트(AGENTS.md 등)가 섞이지 않게, 이미지·시스템 프롬프트 파일도 여기에
+  // Empty temp folder per request: keeps project context (AGENTS.md etc.) out; images and the system prompt file go here too
   const dir = mkdtempSync(join(tmpdir(), "codex-proxy-"));
   try {
-    if (signal?.aborted) throw new Error("client disconnected");   // 대기 중 연결이 끊겼으면 실행 안 함
+    if (signal?.aborted) throw new Error("client disconnected");   // client left while queued → don't run
     writeFileSync(join(dir, "system.md"), system || CFG.defaultSystem);
     const imageArgs = input.images.map((img, n) => {
       const file = join(dir, `image-${n + 1}.${EXT[img.media_type] || "png"}`);
@@ -257,7 +257,7 @@ async function runCodex({ input, system, model, effort, signal }) {
     });
     const args = [
       "exec", "--json", "--ephemeral", "--skip-git-repo-check",
-      "--ignore-user-config",           // ~/.codex/config.toml의 MCP·notify 훅·기본 모델 무시 (로그인은 그대로)
+      "--ignore-user-config",           // ignore MCP servers, notify hooks and default model in ~/.codex/config.toml (login still used)
       "-s", "read-only", "-C", dir,
       ...DISABLED_FEATURES.flatMap((f) => ["--disable", f]),
       ...CODEX_OVERRIDES.flatMap((c) => ["-c", c]),
@@ -265,10 +265,10 @@ async function runCodex({ input, system, model, effort, signal }) {
       "-c", `model_reasoning_effort="${effort || CFG.defaultEffort}"`,
       ...(model ? ["-m", model] : []),
       ...imageArgs,
-      "-",                              // 프롬프트는 stdin으로
+      "-",                              // prompt comes from stdin
     ];
     const env = { ...process.env };
-    delete env.OPENAI_API_KEY;          // ChatGPT 구독 로그인 사용 강제 (API 과금 방지)
+    delete env.OPENAI_API_KEY;          // force the ChatGPT subscription login (no API billing)
     delete env.CODEX_API_KEY;
 
     return await new Promise((resolve, reject) => {
@@ -288,16 +288,16 @@ async function runCodex({ input, system, model, effort, signal }) {
           else if (ev.type === "turn.completed") usage = ev.usage || {};
           else if (ev.type === "turn.failed") errMsg = codexError(ev.error?.message);
           else if (ev.type === "error") errMsg ??= codexError(ev.message);
-          // item.completed + type "error"는 경고라서 무시
+          // item.completed with type "error" is only a warning → ignore
         }
       });
       child.stderr.on("data", (d) => { stderr += d; });
       child.stdin.on("error", () => {});
-      child.on("error", (e) => { clearTimeout(timer); reject(new Error(`codex 실행 실패: ${e.message}`)); });
+      child.on("error", (e) => { clearTimeout(timer); reject(new Error(`failed to run codex: ${e.message}`)); });
       child.on("close", (code) => {
         clearTimeout(timer);
         if (errMsg) return reject(new Error(errMsg));
-        if (!texts.length) return reject(new Error(`codex 종료 코드 ${code}: ${stderr.trim().slice(-500) || "출력 없음 (로그인/사용 한도 확인)"}`));
+        if (!texts.length) return reject(new Error(`codex exited with code ${code}: ${stderr.trim().slice(-500) || "no output (check login / usage limits)"}`));
         resolve({ text: texts.join("\n\n"), usage, model });
       });
       child.stdin.end(input.text || "(empty)");
@@ -308,7 +308,7 @@ async function runCodex({ input, system, model, effort, signal }) {
   }
 }
 
-// 공통 준비: 정규화된 대화 + 도구 → runCodex 인자
+// Shared setup: normalized conversation + tools → runCodex arguments
 async function prepare(body) {
   const norm = normalizeOpenAI(body.messages);
   const tools = normalizeTools(body);
@@ -319,7 +319,7 @@ async function prepare(body) {
   return { input, system, model: mapModel(body.model), effort: effortFrom(body), tools: activeTools };
 }
 
-// ---------- HTTP 유틸 ----------
+// ---------- HTTP helpers ----------
 function send(res, status, obj) {
   res.writeHead(status, { "content-type": "application/json", "access-control-allow-origin": "*" });
   res.end(JSON.stringify(obj));
@@ -364,7 +364,7 @@ async function openaiChat(req, res, body, signal) {
   const id = `chatcmpl-${randomUUID()}`, created = Math.floor(Date.now() / 1000), model = body.model || p.model || "codex";
 
   if (body.stream) {
-    // codex exec는 토큰 단위 스트리밍을 주지 않음 → 완성된 답을 한 번에 보냄
+    // codex exec doesn't stream tokens → send the finished answer in one go
     sse(res);
     const chunk = (delta, finish = null) => res.write(`data: ${JSON.stringify({ id, object: "chat.completion.chunk", created, model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`);
     chunk({ role: "assistant", content: "" });
@@ -396,7 +396,7 @@ async function openaiChat(req, res, body, signal) {
 }
 
 // =====================================================================
-// 5. 라우팅
+// 5. Routing
 // =====================================================================
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, "http://x");
@@ -423,12 +423,12 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// 시작 전 CLI 확인
+// Check the CLI before starting
 const check = spawnSync(CFG.codexBin, ["--version"], { encoding: "utf8", shell: process.platform === "win32" });
 if (check.error || check.status !== 0) {
-  console.error(`codex CLI를 찾을 수 없습니다 (${CFG.codexBin}).
-  이 폴더에서 'npm install'을 실행하거나, 'npm i -g @openai/codex'로 설치하세요.
-  설치 후 'npx codex login'으로 ChatGPT 계정에 로그인하세요.`);
+  console.error(`codex CLI not found (${CFG.codexBin}).
+  Run 'npm install' in this folder, or install it with 'npm i -g @openai/codex'.
+  Then run 'npx codex login' once to sign in with your ChatGPT account.`);
   process.exit(1);
 }
 const MODELS = loadModels();
@@ -437,21 +437,21 @@ console.log(`codex CLI: ${check.stdout.trim()} (${CFG.codexBin})`);
 let port = CFG.port;
 server.on("error", (e) => {
   if (e.code === "EADDRINUSE" && !CFG.portExplicit && port < CFG.port + 10) {
-    console.log(`포트 ${port} 사용 중 → ${port + 1} 시도`);
+    console.log(`port ${port} is in use → trying ${port + 1}`);
     return server.listen(++port, CFG.host);
   }
-  console.error(e.code === "EADDRINUSE" ? `${port}번 포트가 이미 사용 중입니다. --port로 다른 포트를 지정하세요.` : e.message);
+  console.error(e.code === "EADDRINUSE" ? `port ${port} is already in use. Pick another one with --port.` : e.message);
   process.exit(1);
 });
 server.listen(port, CFG.host, () => {
   const base = `http://${CFG.host}:${port}`;
   console.log(`codex-p-proxy → ${base}`);
-  console.log(`  base_url  : ${base}/v1   (OpenAI 호환, POST /v1/chat/completions)`);
-  console.log(`  api_key   : ${CFG.apiKey ? "LOCAL_API_KEY 값" : "아무 값 (예: local)"}`);
-  console.log(`  모델      : ${MODELS.join(", ") || "(목록 없음)"}`);
-  console.log(`  기본 모델 : ${CFG.defaultModel || "Codex 기본값"}, effort ${CFG.defaultEffort}, 동시 실행 ${CFG.maxConcurrent}`);
+  console.log(`  base_url : ${base}/v1   (OpenAI-compatible, POST /v1/chat/completions)`);
+  console.log(`  api_key  : ${CFG.apiKey ? "the LOCAL_API_KEY value" : "any value (e.g. local)"}`);
+  console.log(`  models   : ${MODELS.join(", ") || "(none listed)"}`);
+  console.log(`  default  : ${CFG.defaultModel || "Codex default"}, effort ${CFG.defaultEffort}, ${CFG.maxConcurrent} concurrent`);
   console.log(`
-예시:
+Example:
   curl ${base}/v1/chat/completions -H 'content-type: application/json' \\
-    -d '{"messages":[{"role":"user","content":"안녕"}]}'`);
+    -d '{"messages":[{"role":"user","content":"Hello"}]}'`);
 });

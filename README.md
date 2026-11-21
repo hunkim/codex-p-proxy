@@ -1,67 +1,67 @@
 # codex-p-proxy
 
-> **개인용입니다.** 내 ChatGPT 구독으로 내 컴퓨터에서 나 혼자 쓰는 용도로 만들었습니다.
+> **For personal use.** Built for using my own ChatGPT subscription, on my own machine, by myself.
 
-`codex exec`(Codex CLI)를 OpenAI API 호환으로 감싼 로컬 서버. [claude-p-proxy](https://github.com/hunkim/claude-p-proxy)의 Codex 버전입니다.
-SDK에서 `base_url`만 바꾸면 그대로 붙습니다. 텍스트, 스트리밍, 이미지 입력, function calling 지원.
+A local server that wraps `codex exec` (Codex CLI) in an OpenAI-compatible API. It's the Codex version of [claude-p-proxy](https://github.com/hunkim/claude-p-proxy).
+Point any SDK's `base_url` at it and it just works. Supports text, streaming, image input, and function calling.
 
-## 설치·실행
+## Install & run
 
 ```bash
 git clone https://github.com/hunkim/codex-p-proxy && cd codex-p-proxy
-npm install          # Codex CLI도 함께 설치됨
-npx codex login      # 처음 한 번: ChatGPT 계정으로 로그인
+npm install          # also installs the Codex CLI
+npx codex login      # first time only: sign in with your ChatGPT account
 npm start            # http://127.0.0.1:8790
 ```
 
-이미 `codex`를 전역 설치해 쓰고 있다면 `npm install` 없이 `node server.mjs`만 해도 됩니다.
+If you already have `codex` installed globally, `node server.mjs` works without `npm install`.
 
-포트는 `npm start -- --port 9000`으로 바꿀 수 있습니다. 지정하지 않았는데 8790이 사용 중이면 8791, 8792…로 자동으로 넘어가니 실제 주소는 시작 로그에서 확인하세요.
+Change the port with `npm start -- --port 9000`. If you don't set one and 8790 is busy, it moves on to 8791, 8792, … automatically. The startup screen prints the actual `base_url` to use.
 
-## 사용
+## Usage
 
 ```python
 from openai import OpenAI
 c = OpenAI(base_url="http://127.0.0.1:8790/v1", api_key="local")
 print(c.chat.completions.create(model="gpt-6.2-sol",
-      messages=[{"role": "user", "content": "안녕"}]).choices[0].message.content)
+      messages=[{"role": "user", "content": "Hello"}]).choices[0].message.content)
 ```
 
-Open WebUI, LibreChat 같은 채팅 UI에는 OpenAI 호환 주소로 `http://127.0.0.1:8790/v1`을 넣으면 됩니다.
+For chat UIs like Open WebUI or LibreChat, use `http://127.0.0.1:8790/v1` as the OpenAI-compatible URL.
 
-## 엔드포인트
+## Endpoints
 
-- `POST /v1/chat/completions` — OpenAI 호환
-- `GET /v1/models` (`codex debug models` 목록), `GET /health`
+- `POST /v1/chat/completions` — OpenAI-compatible
+- `GET /v1/models` (the `codex debug models` list), `GET /health`
 
-모델 목록에 있는 이름이면 그 모델로, `gpt-4o` 같은 나머지는 `DEFAULT_MODEL`(없으면 Codex 기본 모델)로 갑니다.
-`reasoning_effort`(low~ultra)는 `model_reasoning_effort`로 넘어갑니다.
+Model names in the list are used as is; anything else (like `gpt-4o`) goes to `DEFAULT_MODEL` (or the Codex default model).
+`reasoning_effort` (low to ultra) is passed on as `model_reasoning_effort`.
 
-## 환경변수
+## Environment variables
 
-| 변수 | 기본값 | 설명 |
+| Variable | Default | Description |
 |---|---|---|
-| `HOST` / `PORT` | `127.0.0.1` / `8790` | `--port`가 `PORT`보다 우선 |
-| `DEFAULT_MODEL` | (Codex 기본값) | |
-| `DEFAULT_EFFORT` | `low` | 요청에 `reasoning_effort`가 없을 때 |
-| `MAX_CONCURRENT` | `2` | 동시에 띄울 `codex` 프로세스 수 |
-| `LOCAL_API_KEY` | (없음) | 설정하면 `Authorization: Bearer` 확인 |
-| `TIMEOUT_MS` | `300000` | 요청당 제한 시간 |
-| `DEFAULT_SYSTEM` | 간단한 지시문 | system 메시지가 없을 때 |
-| `MAX_IMAGE_BYTES` | 10MB | URL 이미지 최대 크기 |
-| `CODEX_BIN` | 자동 | CLI 경로 (기본: `node_modules`의 CLI → PATH의 `codex`) |
+| `HOST` / `PORT` | `127.0.0.1` / `8790` | `--port` takes precedence over `PORT` |
+| `DEFAULT_MODEL` | (Codex default) | |
+| `DEFAULT_EFFORT` | `low` | When the request has no `reasoning_effort` |
+| `MAX_CONCURRENT` | `2` | Number of `codex` processes run at once |
+| `LOCAL_API_KEY` | (none) | If set, checks `Authorization: Bearer` |
+| `TIMEOUT_MS` | `300000` | Time limit per request |
+| `DEFAULT_SYSTEM` | A short instruction | Used when there's no system message |
+| `MAX_IMAGE_BYTES` | 10MB | Max size for URL images |
+| `CODEX_BIN` | auto | CLI path (default: the CLI in `node_modules` → `codex` on PATH) |
 
-## 동작 방식
+## How it works
 
-- 요청마다 빈 임시 폴더에서 `codex exec --json --ephemeral -s read-only`를 띄웁니다. `~/.codex/config.toml`(MCP, 훅, 기본 모델)은 읽지 않고 로그인 정보만 씁니다.
-- Codex는 코딩 에이전트라 기본으로 스킬·플러그인·샌드박스 설명과 도구가 잔뜩 붙습니다. 이를 끄고 시스템 프롬프트를 바꿔 요청당 입력 토큰을 약 17k → 4.5k로 줄였습니다.
-- 대화 기록은 텍스트 하나로 합치고, 이미지는 임시 파일로 저장해 `--image`로 넘깁니다. URL 이미지는 서버가 내려받습니다.
-- Function calling: 도구 정의를 시스템 프롬프트에 넣고 `<tool_calls>[...]</tool_calls>` JSON 블록으로 답하게 한 뒤, 서버가 꺼내 `tool_calls` 형식으로 돌려줍니다. 인자가 스키마에 맞는다는 보장은 없으니 중요한 곳에서는 검증하세요.
-- `OPENAI_API_KEY`·`CODEX_API_KEY`는 자식 프로세스에서 지워 구독 한도만 씁니다.
+- Each request runs `codex exec --json --ephemeral -s read-only` in an empty temp folder. It doesn't read `~/.codex/config.toml` (MCP servers, hooks, default model); it only uses your login.
+- Codex is a coding agent, so by default it adds lots of skill, plugin, and sandbox instructions plus tools. These are turned off and the system prompt is replaced, cutting input tokens per request from about 17k to 4.5k.
+- The conversation history is merged into one text prompt. Images are saved as temp files and passed with `--image`; the server downloads URL images itself.
+- Function calling: tool definitions go into the system prompt, the model is asked to answer with a `<tool_calls>[...]</tool_calls>` JSON block, and the server extracts it and returns it as `tool_calls`. Arguments aren't guaranteed to match the schema, so validate them where it matters.
+- `OPENAI_API_KEY` and `CODEX_API_KEY` are removed from the child process so only your subscription is used.
 
-## 한계
+## Limitations
 
-- **스트리밍은 가짜입니다.** `codex exec`가 토큰 단위 출력을 주지 않아, 답이 완성된 뒤 한 번에 보냅니다.
-- 첫 응답까지 수 초 (프로세스 시작 비용), 요청마다 약 4.5k 입력 토큰 고정 비용
-- temperature·max_tokens·stop 등은 무시, PDF·오디오 입력 미지원
-- 사용량은 ChatGPT 앱·Codex와 같은 구독 한도에서 빠집니다
+- **Streaming isn't real.** `codex exec` doesn't output tokens as they're generated, so the answer is sent in one piece once it's finished.
+- A few seconds until the first response (process startup), and a fixed cost of about 4.5k input tokens per request
+- temperature, max_tokens, stop, etc. are ignored; PDF and audio input aren't supported
+- Usage counts against the same subscription limits as the ChatGPT app and Codex
