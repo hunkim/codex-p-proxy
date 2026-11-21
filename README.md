@@ -14,6 +14,21 @@ npx codex login      # first time only: sign in with your ChatGPT account
 npm start            # http://127.0.0.1:8790
 ```
 
+`npm start` prints what you need to connect:
+
+```
+codex CLI: codex-cli 0.171.0 (/path/to/codex-p-proxy/node_modules/.bin/codex)
+codex-p-proxy → http://127.0.0.1:8790
+  base_url : http://127.0.0.1:8790/v1   (OpenAI-compatible, POST /v1/chat/completions)
+  api_key  : any value (e.g. local)
+  models   : gpt-6.2-sol, gpt-6.2-astra, gpt-6.1-terra, gpt-6.1-sol, ...
+  default  : Codex default, effort low, 2 concurrent
+
+Example:
+  curl http://127.0.0.1:8790/v1/chat/completions -H 'content-type: application/json' \
+    -d '{"messages":[{"role":"user","content":"Hello"}]}'
+```
+
 If you already have `codex` installed globally, `node server.mjs` works without `npm install`.
 
 Change the port with `npm start -- --port 9000`. If you don't set one and 8790 is busy, it moves on to 8791, 8792, … automatically. The startup screen prints the actual `base_url` to use.
