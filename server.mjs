@@ -444,8 +444,14 @@ server.on("error", (e) => {
   process.exit(1);
 });
 server.listen(port, CFG.host, () => {
-  console.log(`codex-p-proxy → http://${CFG.host}:${port}`);
-  console.log(`  OpenAI    : POST /v1/chat/completions`);
+  const base = `http://${CFG.host}:${port}`;
+  console.log(`codex-p-proxy → ${base}`);
+  console.log(`  base_url  : ${base}/v1   (OpenAI 호환, POST /v1/chat/completions)`);
+  console.log(`  api_key   : ${CFG.apiKey ? "LOCAL_API_KEY 값" : "아무 값 (예: local)"}`);
   console.log(`  모델      : ${MODELS.join(", ") || "(목록 없음)"}`);
   console.log(`  기본 모델 : ${CFG.defaultModel || "Codex 기본값"}, effort ${CFG.defaultEffort}, 동시 실행 ${CFG.maxConcurrent}`);
+  console.log(`
+예시:
+  curl ${base}/v1/chat/completions -H 'content-type: application/json' \\
+    -d '{"messages":[{"role":"user","content":"안녕"}]}'`);
 });
